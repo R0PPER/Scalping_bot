@@ -1,4 +1,4 @@
-# main.py
+# main.py - CORRECTED
 import json
 from backtest_engine import BacktestEngine
 from visualizer import Visualizer
@@ -17,27 +17,17 @@ def main():
             config = json.load(f)
     except FileNotFoundError:
         print("❌ config.json not found! Creating default...")
-        # Default config
         config = {
-            "initial_capital": 300,
-            "max_capital": 680,
+            "initial_capital": 680,
             "leverage": 50,
-            "entry_spacing": 0.003,
-            "base_position": 0.005,
-            "max_entries": 100,
-            "max_exposure": 0.25,
-            "max_drawdown": 0.35,
-            "liquidation_buffer": 0.10,
-            "tp1": 0.008,
-            "tp1_close": 0.20,
-            "tp2": 0.015,
-            "tp2_close": 0.30,
-            "tp3": 0.025,
-            "tp3_close": 0.50,
+            "entry_spacing_up": 0.005,
+            "entry_spacing_down": 0.0005,
+            "target_move": 0.02,
+            "max_entries": 200,
+            "max_drawdown": 0.30,
             "test_coins": ["ONDO", "HYPE"],
             "test_days": 7,
-            "timeframe": "5m",
-            "emergency_stop": -0.40
+            "timeframe": "5m"
         }
         with open('config.json', 'w') as f:
             json.dump(config, f, indent=4)
@@ -47,7 +37,15 @@ def main():
     print(f"   • Days: {config['test_days']}")
     print(f"   • Initial Capital: ${config['initial_capital']}")
     print(f"   • Leverage: {config['leverage']}x")
-    print(f"   • Entry Spacing: {config['entry_spacing']*100:.2f}%")
+    
+    # 🔥 ΕΜΦΑΝΙΣΗ ΚΑΙ ΤΩΝ ΔΥΟ SPACINGS
+    if 'entry_spacing_up' in config and 'entry_spacing_down' in config:
+        print(f"   • Entry Spacing (Άνοδος): {config['entry_spacing_up']*100:.2f}%")
+        print(f"   • Entry Spacing (Πτώση): {config['entry_spacing_down']*100:.2f}%")
+    else:
+        # Fallback για παλιά config
+        entry_spacing = config.get('entry_spacing', 0.001)
+        print(f"   • Entry Spacing: {entry_spacing*100:.2f}%")
     
     # Εκτέλεση backtest
     engine = BacktestEngine(config)
@@ -65,7 +63,11 @@ def main():
         print(f"   • Profit:  ${result['total_profit']:,.2f}")
         print(f"   • ROI:     {result['roi']:.2f}%")
         print(f"   • Trades:  {result['total_trades']}")
-        print(f"   • Entries: {len(result['entries_df'])}")
+        print(f"   • Entries: {result['entries']}")
+        if 'min_distance_to_liq' in result:
+            print(f"   • Min Distance to Liq: {result['min_distance_to_liq']:.2f}%")
+        if 'max_exposure' in result:
+            print(f"   • Max Exposure: {result['max_exposure']:.2f}%")
     
     # Δημιουργία γραφημάτων
     viz = Visualizer()

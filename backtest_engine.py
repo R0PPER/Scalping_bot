@@ -1,4 +1,4 @@
-# backtest_engine.py - 30 DAYS WITH REAL DATA
+# backtest_engine.py - WITH 5m DATA FOR MORE TRADES
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
@@ -13,37 +13,27 @@ class BacktestEngine:
         self.strategy = BuickStrategy(config)
         self.results = {}
         
-    def fetch_data(self, symbol: str, days: int = 30) -> pd.DataFrame:
-        """Φέρνει ΠΡΑΓΜΑΤΙΚΑ δεδομένα από Binance για 30 μέρες"""
-        print(f"📡 Φορτώνω πραγματικά δεδομένα για {symbol}...")
+    def fetch_data(self, symbol: str, days: int = 7) -> pd.DataFrame:
+        """
+        🔥 Χρησιμοποιούμε 5m intervals για ΠΕΡΙΣΣΟΤΕΡΑ trades
+        """
+        print(f"📡 Φορτώνω δεδομένα για {symbol}...")
         
-        # Χρησιμοποιούμε 1h intervals για να χωρέσουν 30 μέρες
-        interval = self.config.get('timeframe', '1h')
+        interval = "5m"  # 🔥 5 λεπτά για πολλά trades
         
-        # Χάρτης intervals
-        interval_minutes = {
-            '1m': 1, '3m': 3, '5m': 5, '15m': 15, 
-            '30m': 30, '1h': 60, '2h': 120, '4h': 240,
-            '6h': 360, '8h': 480, '12h': 720, '1d': 1440
-        }
+        # 7 μέρες * 24 ώρες * 12 = 2016 καντέλια
+        # Binance limit = 1000, οπότε παίρνουμε όσα περισσότερα γίνεται
+        limit = 1000
+        days_to_fetch = 7  # 7 μέρες με 5m = 2016 καντέλια, παίρνουμε 1000
         
-        minutes = interval_minutes.get(interval, 60)
-        
-        # Υπολογισμός πόσα candlesticks χρειαζόμαστε
-        # 30 μέρες * 24 ώρες * 60 λεπτά / minutes_per_candle
-        total_candles = days * 24 * 60 // minutes
-        limit = min(total_candles, 1000)  # Max 1000 από Binance
-        
-        # Start time: πριν από 'days' μέρες
-        start_time = int((datetime.now() - timedelta(days=days)).timestamp() * 1000)
+        start_time = int((datetime.now() - timedelta(days=days_to_fetch)).timestamp() * 1000)
         end_time = int(datetime.now().timestamp() * 1000)
         
-        print(f"   • Διαστήματα: {interval} ({minutes} λεπτά)")
+        print(f"   • Διαστήματα: 5m")
         print(f"   • Ζητώ: {limit} καντέλια")
         print(f"   • Από: {datetime.fromtimestamp(start_time/1000).strftime('%Y-%m-%d %H:%M')}")
         print(f"   • Έως: {datetime.fromtimestamp(end_time/1000).strftime('%Y-%m-%d %H:%M')}")
         
-        # Δοκιμάζουμε Futures πρώτα
         try:
             base_url = "https://fapi.binance.com/fapi/v1/klines"
             symbol_pair = f"{symbol}USDT"
@@ -61,9 +51,9 @@ class BacktestEngine:
             
             if isinstance(data, dict) and 'code' in data:
                 if data['code'] == -1121:
-                    print(f"⚠️ Το {symbol} δεν υπάρχει στα futures, δοκιμάζω spot...")
+                    print(f"⚠️ {symbol} δεν υπάρχει στα futures")
                 else:
-                    print(f"⚠️ Futures API error: {data}")
+                    print(f"⚠️ API error: {data}")
             else:
                 df = self._process_klines_data(data)
                 print(f"✅ Φόρτωσα {len(df)} καντέλια για {symbol} (futures)")
@@ -73,7 +63,6 @@ class BacktestEngine:
         except Exception as e:
             print(f"⚠️ Futures error: {e}")
         
-        # Δοκιμάζουμε Spot
         try:
             base_url = "https://api.binance.com/api/v3/klines"
             symbol_pair = f"{symbol}USDT"
@@ -90,10 +79,7 @@ class BacktestEngine:
             data = response.json()
             
             if isinstance(data, dict) and 'code' in data:
-                if data['code'] == -1121:
-                    print(f"❌ Το {symbol} δεν υπάρχει ούτε στο spot")
-                else:
-                    print(f"⚠️ Spot API error: {data}")
+                print(f"❌ {symbol} δεν υπάρχει ούτε στο spot")
             else:
                 df = self._process_klines_data(data)
                 print(f"✅ Φόρτωσα {len(df)} καντέλια για {symbol} (spot)")
@@ -103,12 +89,10 @@ class BacktestEngine:
         except Exception as e:
             print(f"❌ Spot error: {e}")
         
-        # Fallback σε συνθετικά
         print(f"⚠️ Χρησιμοποιώ συνθετικά δεδομένα για {symbol}")
-        return self.generate_synthetic_data(symbol, days)
+        return self.generate_synthetic_data(symbol, 7)
     
     def _process_klines_data(self, data) -> pd.DataFrame:
-        """Επεξεργάζεται τα δεδομένα από Binance"""
         df = pd.DataFrame(data, columns=[
             'timestamp', 'open', 'high', 'low', 'close', 'volume',
             'close_time', 'quote_asset_volume', 'number_of_trades',
@@ -126,14 +110,8 @@ class BacktestEngine:
         return df
     
     def generate_synthetic_data(self, symbol: str, days: int) -> pd.DataFrame:
-        """Δημιουργεί συνθετικά δεδομένα"""
-        print(f"🧪 Δημιουργώ ΣΥΝΘΕΤΙΚΑ δεδομένα για {symbol}...")
-        
-        interval = self.config.get('timeframe', '1h')
-        interval_minutes = {'1h': 60, '4h': 240, '1d': 1440}
-        minutes = interval_minutes.get(interval, 60)
-        periods = days * 24 * 60 // minutes
-        
+        print(f"🧪 Συνθετικά δεδομένα για {symbol}...")
+        periods = days * 24 * 12
         base_price = 1.0 if symbol == "ONDO" else 25.0 if symbol == "HYPE" else 100.0
         
         np.random.seed(42)
@@ -146,12 +124,11 @@ class BacktestEngine:
             'low': prices * (1 + np.random.normal(-0.001, 0.001, periods)),
             'close': prices,
             'volume': np.random.uniform(1000, 10000, periods)
-        }, index=pd.date_range(end=datetime.now(), periods=periods, freq=interval))
+        }, index=pd.date_range(end=datetime.now(), periods=periods, freq='5min'))
         
         return df
     
     def run_backtest(self, symbol: str) -> Dict:
-        """Τρέχει το backtest για ένα σύμβολο"""
         print(f"\n🔄 Backtesting {symbol}...")
         
         df = self.fetch_data(symbol, self.config['test_days'])
@@ -162,15 +139,17 @@ class BacktestEngine:
         positions = []
         trades = []
         equity_history = [strategy.capital]
+        liq_history = []
         
         total_entries = 0
         total_exits = 0
         total_profit = 0
+        liquidated = False
         
         for idx, row in df.iterrows():
             price = row['close']
             
-            # 1. EXITS
+            # 1. EXITS: Κάθε θέση ανεξάρτητα
             exits = strategy.calculate_exits(price, positions)
             for exit_order in exits:
                 pos = exit_order['position']
@@ -211,7 +190,22 @@ class BacktestEngine:
                         'symbol': symbol
                     })
             
-            # 3. EMERGENCY CHECK
+            # 3. LIQUIDATION INFO
+            liq_info = strategy.get_liquidation_info(price, positions)
+            liq_history.append({
+                'timestamp': idx,
+                'price': price,
+                'distance': liq_info['distance'],
+                'exposure': liq_info['exposure_percent'],
+                'open_positions': liq_info['open_positions']
+            })
+            
+            if liq_info['is_liquidated']:
+                liquidated = True
+                print(f"💀 LIQUIDATION ΣΤΟ {symbol} στις {idx} με τιμή {price}")
+                positions = []
+                break
+            
             if strategy.check_emergency(price, positions):
                 print(f"⚠️ EMERGENCY STOP για {symbol} στο {price}")
                 for pos in positions:
@@ -236,9 +230,9 @@ class BacktestEngine:
                     unrealized += (price - pos['entry_price']) * pos['base_amount'] / pos['entry_price']
             equity_history.append(current_equity + unrealized)
         
-        final_capital = strategy.capital
+        final_capital = strategy.capital if not liquidated else 0
         total_trades = len([t for t in trades if t['type'] == 'EXIT'])
-        roi = ((final_capital - self.config['initial_capital']) / self.config['initial_capital']) * 100
+        roi = ((final_capital - self.config['initial_capital']) / self.config['initial_capital']) * 100 if not liquidated else -100
         
         entries_df = pd.DataFrame([
             {'time': t['timestamp'], 'price': t['price'], 'entry_index': t.get('entry_index', 0)}
@@ -250,9 +244,25 @@ class BacktestEngine:
             for t in trades if t['type'] == 'EXIT'
         ])
         
-        print(f"📊 {symbol} | ROI: {roi:.2f}% | Trades: {total_trades} | Entries: {len(entries_df)}")
+        liq_df = pd.DataFrame(liq_history)
+        if not liq_df.empty:
+            min_distance = liq_df['distance'].min()
+            avg_distance = liq_df['distance'].mean()
+            max_exposure = liq_df['exposure'].max()
+            warnings = len([d for d in liq_df['distance'] if d < 5])
+        else:
+            min_distance = 100
+            avg_distance = 100
+            max_exposure = 0
+            warnings = 0
+        
+        print(f"\n📊 {symbol} | ROI: {roi:.2f}% | Trades: {total_trades} | Entries: {len(entries_df)}")
         print(f"   • Σύνολο κερδών: ${total_profit:.2f}")
         print(f"   • Μέσο κέρδος/trade: ${total_profit/total_trades if total_trades > 0 else 0:.4f}")
+        print(f"   • 🔥 LIQUIDATION: {'✅ ΟΧΙ' if not liquidated else '💀 ΝΑΙ'}")
+        if not liquidated:
+            print(f"   • Ελάχιστη απόσταση: {min_distance:.2f}%")
+            print(f"   • Μέγιστη έκθεση: {max_exposure:.2f}%")
         
         return {
             'symbol': symbol,
@@ -266,7 +276,13 @@ class BacktestEngine:
             'entries_df': entries_df,
             'exits_df': exits_df,
             'equity_history': equity_history,
-            'price_data': df
+            'price_data': df,
+            'liquidation_occurred': liquidated,
+            'min_distance_to_liq': min_distance,
+            'avg_distance_to_liq': avg_distance,
+            'max_exposure': max_exposure,
+            'liquidation_warnings': warnings,
+            'liq_history': liq_df
         }
     
     def run_multi_backtest(self) -> Dict:
