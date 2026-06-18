@@ -1,0 +1,13 @@
+{
+  "initial_capital": 300,
+  "leverage": 50,
+  "entry_spacing": 0.001,
+  "tp_spacing": 0.003,
+  "base_position": 0.001,
+  "max_entries": 150,
+  "max_exposure": 0.2,
+  "max_drawdown": 0.3,
+  "test_coins": ["ONDO", "HYPE"],
+  "test_days": 7,
+  "timeframe": "5m"
+}
