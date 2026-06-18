@@ -8,6 +8,6 @@
   "max_exposure": 0.2,
   "max_drawdown": 0.3,
   "test_coins": ["ONDO", "HYPE"],
-  "test_days": 7,
-  "timeframe": "5m"
+  "test_days": 30,
+  "timeframe": "1h"
 }
