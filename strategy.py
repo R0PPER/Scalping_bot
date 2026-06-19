@@ -35,13 +35,15 @@ class BuickStrategy:
         # ξεπεράσει ένα όριο.
         self.max_exposure_ratio = config.get('max_exposure_ratio', 8.0)  # notional <= 8x capital
 
-        # Liquidation tracking
+        # Liquidation and drawdown tracking
         self.liquidation_warnings = []
         self.liquidation_occurred = False
         self.liquidation_price = 0
         self.liquidation_time = None
         self.min_distance_to_liq = 100
         self.max_exposure_percent = 0
+        self.max_drawdown = 0.0
+        self.peak_equity = config['initial_capital']
 
     def calculate_entry(self, price: float, capital: float) -> Optional[Dict]:
         """
@@ -221,20 +223,6 @@ class BuickStrategy:
             'risk_ratio': risk_ratio,
             'is_liquidated': is_liquidated,
         }
-
-    def check_emergency(self, price: float, positions: List[Dict]) -> bool:
-        open_positions = [p for p in positions if not p.get('closed', False)]
-        if not open_positions:
-            return False
-
-        total_notional = sum(p['notional'] for p in open_positions)
-        if total_notional == 0:
-            return False
-
-        avg_entry = sum(p['entry_price'] * p['notional'] for p in open_positions) / total_notional
-        drop = (avg_entry - price) / avg_entry
-
-        return drop > abs(self.config.get('emergency_stop', -0.30))
 
     def update_capital(self, profit: float):
         self.capital += profit

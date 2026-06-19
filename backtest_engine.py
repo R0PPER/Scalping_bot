@@ -14,26 +14,26 @@ class BacktestEngine:
         self.config = config
         self.data_dir = "data"
 
-    def load_local_data(self, symbol: str) -> pd.DataFrame:
-        filename = f"{self.data_dir}/{symbol}_5m_30days.csv"
+    def load_local_data(self, symbol: str, days: int = 30) -> pd.DataFrame:
+        filename = f"{self.data_dir}/{symbol}_5m_{days}days.csv"
 
         if os.path.exists(filename):
             df = pd.read_csv(filename, index_col=0, parse_dates=True)
-            print(f"✅ Φόρτωσα {len(df)} καντέλια για {symbol} από τοπικό αρχείο")
-            print(f"   • Από: {df.index[0]} έως {df.index[-1]} "
+            print(f"Loaded {len(df)} candles for {symbol} from local file")
+            print(f"   • From: {df.index[0]} to {df.index[-1]} "
                   f"({df.index[-1] - df.index[0]})")
             return df
         else:
-            print(f"⚠️ Τοπικό αρχείο για {symbol} δεν βρέθηκε: {filename}")
+            print(f"Local file for {symbol} not found: {filename}")
             return pd.DataFrame()
 
     def fetch_data(self, symbol: str, days: int = 7) -> pd.DataFrame:
         """
-        Φορτώνει local CSV. Αν τα data είναι ΛΙΓΟΤΕΡΑ από τα ζητούμενα 'days',
-        χρησιμοποιεί ό,τι υπάρχει (δεν κάνει fallback σε synthetic - θέλουμε
-        πάντα πραγματικά δεδομένα όταν υπάρχουν, ακόμα κι αν είναι λιγότερα).
+        Load local CSV. If data is less than requested 'days',
+        use whatever exists (no fallback to synthetic - always want
+        real data when available, even if less).
         """
-        df = self.load_local_data(symbol)
+        df = self.load_local_data(symbol, days)
 
         if df.empty:
             raise FileNotFoundError(
@@ -45,17 +45,16 @@ class BacktestEngine:
         requested_span = timedelta(days=days)
 
         if available_span < requested_span:
-            print(f"   ⚠️ Ζητήθηκαν {days} μέρες αλλά υπάρχουν μόνο "
-                  f"{available_span}. Χρησιμοποιώ ΟΛΑ τα διαθέσιμα δεδομένα.")
+            print(f"   Requested {days} days but only {available_span} available. Using ALL available data.")
         else:
             cutoff = df.index[-1] - requested_span
             df = df[df.index >= cutoff]
-            print(f"   • Περικοπή σε {days} μέρες: {df.index[0]} έως {df.index[-1]}")
+            print(f"   • Truncated to {days} days: {df.index[0]} to {df.index[-1]}")
 
         return df
 
     def run_backtest(self, symbol: str) -> Dict:
-        print(f"\n🔄 Backtesting {symbol}...")
+        print(f"\nBacktesting {symbol}...")
 
         df = self.fetch_data(symbol, self.config['test_days'])
 
@@ -77,6 +76,11 @@ class BacktestEngine:
         min_distance_overall = 100.0
         max_exposure_overall = 0.0
         warning_count = 0
+        peak_equity = self.config['initial_capital']
+        max_drawdown = 0.0
+
+        fee_rate = self.config.get('fee_rate', 0.0002)
+        total_fees = 0.0
 
         for idx, row in df.iterrows():
             price = row['close']
@@ -86,6 +90,11 @@ class BacktestEngine:
             for exit_order in exits:
                 pos = exit_order['position']
                 profit = exit_order['profit']
+                
+                # Calculate exit fee
+                exit_fee = pos['notional'] * fee_rate
+                total_fees += exit_fee
+                profit -= exit_fee
 
                 strategy.capital += profit
                 total_profit += profit
@@ -96,6 +105,7 @@ class BacktestEngine:
                     'type': 'EXIT',
                     'price': price,
                     'profit': profit,
+                    'fee': exit_fee,
                     'entry_index': pos['entry_index'],
                     'entry_price': pos['entry_price'],
                     'symbol': symbol,
@@ -107,6 +117,11 @@ class BacktestEngine:
             if strategy.should_enter(price, positions):
                 entry = strategy.calculate_entry(price, strategy.capital)
                 if entry is not None:
+                    # Calculate entry fee
+                    entry_fee = entry['notional'] * fee_rate
+                    total_fees += entry_fee
+                    strategy.capital -= entry_fee
+                    
                     entry['entry_time'] = idx
                     positions.append(entry)
                     total_entries += 1
@@ -117,6 +132,7 @@ class BacktestEngine:
                         'price': price,
                         'margin': entry['margin'],
                         'notional': entry['notional'],
+                        'fee': entry_fee,
                         'entry_index': entry['entry_index'],
                         'symbol': symbol,
                     })
@@ -124,6 +140,13 @@ class BacktestEngine:
             # 3. ΣΩΣΤΟ unrealized PnL (με leverage) -> live equity
             unrealized = strategy.calculate_unrealized_pnl(price, positions)
             current_equity = strategy.capital + unrealized
+
+            # 4. Calculate max drawdown
+            if current_equity > peak_equity:
+                peak_equity = current_equity
+            drawdown = (peak_equity - current_equity) / peak_equity * 100
+            if drawdown > max_drawdown:
+                max_drawdown = drawdown
 
             # 4. Liquidation check βάσει ΖΩΝΤΑΝΟΥ equity (όχι μόνο realized capital)
             liq_info = strategy.get_liquidation_info(price, positions, equity=current_equity)
@@ -148,33 +171,16 @@ class BacktestEngine:
                 liquidated = True
                 liquidation_time = idx
                 liquidation_price = price
-                print(f"💀 LIQUIDATION στο {symbol} στις {idx} με τιμή {price:.5f} "
-                      f"(equity έπεσε στα ${current_equity:.2f})")
+                print(f"LIQUIDATION for {symbol} at {idx} with price {price:.5f} "
+                      f"(equity dropped to ${current_equity:.2f})")
                 strategy.capital = max(current_equity, 0)
                 positions = []
                 equity_history.append(strategy.capital)
                 equity_timestamps.append(idx)
                 break
 
-            # 5. Emergency stop (πριν φτάσουμε σε liquidation, κλείνουμε όλα χειροκίνητα)
-            if strategy.check_emergency(price, positions):
-                print(f"⚠️ EMERGENCY STOP για {symbol} στο {price:.5f} "
-                      f"({idx}) — κλείνω όλες τις ανοιχτές θέσεις")
-                emergency_pnl = strategy.calculate_unrealized_pnl(price, positions)
-                strategy.capital += emergency_pnl
-                total_profit += emergency_pnl
-                trades.append({
-                    'timestamp': idx,
-                    'type': 'EMERGENCY_EXIT',
-                    'price': price,
-                    'profit': emergency_pnl,
-                    'symbol': symbol,
-                })
-                positions = []
-                current_equity = strategy.capital
-
-            equity_history.append(current_equity)
-            equity_timestamps.append(idx)
+        equity_history.append(current_equity)
+        equity_timestamps.append(idx)
 
         final_capital = strategy.capital if not liquidated else 0
         total_trades = len([t for t in trades if t['type'] == 'EXIT'])
@@ -192,20 +198,23 @@ class BacktestEngine:
 
         liq_df = pd.DataFrame(liq_history)
 
-        print(f"\n📊 {symbol} | ROI: {roi:.2f}% | Trades(exits): {total_trades} | Entries: {total_entries}")
-        print(f"   • Σύνολο κερδών: ${total_profit:.2f}")
+        print(f"\n{symbol} | ROI: {roi:.2f}% | Trades(exits): {total_trades} | Entries: {total_entries}")
+        print(f"   • Total profit: ${total_profit:.2f}")
+        print(f"   • Total fees: ${total_fees:.2f}")
         if total_trades > 0:
-            print(f"   • Μέσο κέρδος/exit: ${total_profit/total_trades:.4f}")
-        print(f"   • 🔥 LIQUIDATION: {'💀 ΝΑΙ' if liquidated else '✅ ΟΧΙ'}")
-        print(f"   • Ελάχιστη απόσταση από liq: {min_distance_overall:.2f}%")
-        print(f"   • Μέγιστη έκθεση (notional/capital): {max_exposure_overall:.2f}%")
-        print(f"   • Warnings (<5% από liq): {warning_count}")
+            print(f"   • Avg profit/exit: ${total_profit/total_trades:.4f}")
+        print(f"   • LIQUIDATION: {'YES' if liquidated else 'NO'}")
+        print(f"   • Min distance to liq: {min_distance_overall:.2f}%")
+        print(f"   • Max exposure (notional/capital): {max_exposure_overall:.2f}%")
+        print(f"   • Warnings (<5% from liq): {warning_count}")
+        print(f"   • Max drawdown: {max_drawdown:.2f}%")
 
         return {
             'symbol': symbol,
             'initial_capital': self.config['initial_capital'],
             'final_capital': final_capital,
             'total_profit': total_profit,
+            'total_fees': total_fees,
             'roi': roi,
             'total_trades': total_trades,
             'entries': total_entries,
@@ -221,6 +230,7 @@ class BacktestEngine:
             'min_distance_to_liq': min_distance_overall,
             'max_exposure': max_exposure_overall,
             'liquidation_warnings': warning_count,
+            'max_drawdown': max_drawdown,
             'liq_history': liq_df,
         }
 

@@ -1,15 +1,15 @@
 {
   "initial_capital": 150,
   "leverage": 50,
-  "margin_fraction": 0.01,
+  "margin_fraction": 0.0038,
   "min_margin": 0.5,
-  "max_exposure_ratio": 2.0,
-  "entry_spacing_up": 0.005,
-  "entry_spacing_down": 0.002,
+  "max_exposure_ratio": 0.8,
+  "entry_spacing_up": 0.006,
+  "entry_spacing_down": 0.0025,
   "target_move": 0.018,
   "max_entries": 300,
-  "emergency_stop": 0.3,
+  "fee_rate": 0.0002,
   "test_coins": ["ONDO", "HYPE"],
-  "test_days": 7,
+  "test_days": 90,
   "timeframe": "5m"
 }
