@@ -15,17 +15,23 @@ class BacktestEngine:
         self.data_dir = "data"
 
     def load_local_data(self, symbol: str, days: int = 30) -> pd.DataFrame:
-        filename = f"{self.data_dir}/{symbol}_5m_{days}days.csv"
-
-        if os.path.exists(filename):
-            df = pd.read_csv(filename, index_col=0, parse_dates=True)
-            print(f"Loaded {len(df)} candles for {symbol} from local file")
-            print(f"   • From: {df.index[0]} to {df.index[-1]} "
-                  f"({df.index[-1] - df.index[0]})")
-            return df
-        else:
-            print(f"Local file for {symbol} not found: {filename}")
-            return pd.DataFrame()
+        # Check for longer data files first (prioritize 90, then 30, then requested days)
+        possible_files = [
+            f"{self.data_dir}/{symbol}_5m_90days.csv",
+            f"{self.data_dir}/{symbol}_5m_30days.csv",
+            f"{self.data_dir}/{symbol}_5m_{days}days.csv"
+        ]
+        
+        for filename in possible_files:
+            if os.path.exists(filename):
+                df = pd.read_csv(filename, index_col=0, parse_dates=True)
+                print(f"Loaded {len(df)} candles for {symbol} from local file")
+                print(f"   • From: {df.index[0]} to {df.index[-1]} "
+                      f"({df.index[-1] - df.index[0]})")
+                return df
+        
+        print(f"No local files found for {symbol}")
+        return pd.DataFrame()
 
     def fetch_data(self, symbol: str, days: int = 7) -> pd.DataFrame:
         """
