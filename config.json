@@ -9,7 +9,7 @@
   "target_move": 0.018,
   "max_entries": 300,
   "fee_rate": 0.0002,
-  "test_coins": ["ONDO", "HYPE"],
+  "test_coins": ["ONDOUSDT", "HYPEUSDT"],
   "test_days": 90,
   "timeframe": "5m"
 }
