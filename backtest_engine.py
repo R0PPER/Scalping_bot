@@ -1,164 +1,96 @@
-# backtest_engine.py - WITH 5m DATA FOR MORE TRADES
+# backtest_engine.py - FIXED: equity curve με σωστό leveraged PnL,
+# liquidation check πάνω στο live equity (όχι ξεχωριστό/ανεξάρτητο tracking)
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 import json
 from typing import Dict, List, Optional, Any
-import requests
+import os
 from strategy import BuickStrategy
+
 
 class BacktestEngine:
     def __init__(self, config: Dict):
         self.config = config
-        self.strategy = BuickStrategy(config)
-        self.results = {}
-        
+        self.data_dir = "data"
+
+    def load_local_data(self, symbol: str) -> pd.DataFrame:
+        filename = f"{self.data_dir}/{symbol}_5m_30days.csv"
+
+        if os.path.exists(filename):
+            df = pd.read_csv(filename, index_col=0, parse_dates=True)
+            print(f"✅ Φόρτωσα {len(df)} καντέλια για {symbol} από τοπικό αρχείο")
+            print(f"   • Από: {df.index[0]} έως {df.index[-1]} "
+                  f"({df.index[-1] - df.index[0]})")
+            return df
+        else:
+            print(f"⚠️ Τοπικό αρχείο για {symbol} δεν βρέθηκε: {filename}")
+            return pd.DataFrame()
+
     def fetch_data(self, symbol: str, days: int = 7) -> pd.DataFrame:
         """
-        🔥 Χρησιμοποιούμε 5m intervals για ΠΕΡΙΣΣΟΤΕΡΑ trades
+        Φορτώνει local CSV. Αν τα data είναι ΛΙΓΟΤΕΡΑ από τα ζητούμενα 'days',
+        χρησιμοποιεί ό,τι υπάρχει (δεν κάνει fallback σε synthetic - θέλουμε
+        πάντα πραγματικά δεδομένα όταν υπάρχουν, ακόμα κι αν είναι λιγότερα).
         """
-        print(f"📡 Φορτώνω δεδομένα για {symbol}...")
-        
-        interval = "5m"  # 🔥 5 λεπτά για πολλά trades
-        
-        # 7 μέρες * 24 ώρες * 12 = 2016 καντέλια
-        # Binance limit = 1000, οπότε παίρνουμε όσα περισσότερα γίνεται
-        limit = 1000
-        days_to_fetch = 7  # 7 μέρες με 5m = 2016 καντέλια, παίρνουμε 1000
-        
-        start_time = int((datetime.now() - timedelta(days=days_to_fetch)).timestamp() * 1000)
-        end_time = int(datetime.now().timestamp() * 1000)
-        
-        print(f"   • Διαστήματα: 5m")
-        print(f"   • Ζητώ: {limit} καντέλια")
-        print(f"   • Από: {datetime.fromtimestamp(start_time/1000).strftime('%Y-%m-%d %H:%M')}")
-        print(f"   • Έως: {datetime.fromtimestamp(end_time/1000).strftime('%Y-%m-%d %H:%M')}")
-        
-        try:
-            base_url = "https://fapi.binance.com/fapi/v1/klines"
-            symbol_pair = f"{symbol}USDT"
-            
-            params = {
-                'symbol': symbol_pair,
-                'interval': interval,
-                'limit': limit,
-                'startTime': start_time,
-                'endTime': end_time
-            }
-            
-            response = requests.get(base_url, params=params, timeout=10)
-            data = response.json()
-            
-            if isinstance(data, dict) and 'code' in data:
-                if data['code'] == -1121:
-                    print(f"⚠️ {symbol} δεν υπάρχει στα futures")
-                else:
-                    print(f"⚠️ API error: {data}")
-            else:
-                df = self._process_klines_data(data)
-                print(f"✅ Φόρτωσα {len(df)} καντέλια για {symbol} (futures)")
-                print(f"   • Από: {df.index[0]} έως {df.index[-1]}")
-                return df
-                
-        except Exception as e:
-            print(f"⚠️ Futures error: {e}")
-        
-        try:
-            base_url = "https://api.binance.com/api/v3/klines"
-            symbol_pair = f"{symbol}USDT"
-            
-            params = {
-                'symbol': symbol_pair,
-                'interval': interval,
-                'limit': limit,
-                'startTime': start_time,
-                'endTime': end_time
-            }
-            
-            response = requests.get(base_url, params=params, timeout=10)
-            data = response.json()
-            
-            if isinstance(data, dict) and 'code' in data:
-                print(f"❌ {symbol} δεν υπάρχει ούτε στο spot")
-            else:
-                df = self._process_klines_data(data)
-                print(f"✅ Φόρτωσα {len(df)} καντέλια για {symbol} (spot)")
-                print(f"   • Από: {df.index[0]} έως {df.index[-1]}")
-                return df
-                
-        except Exception as e:
-            print(f"❌ Spot error: {e}")
-        
-        print(f"⚠️ Χρησιμοποιώ συνθετικά δεδομένα για {symbol}")
-        return self.generate_synthetic_data(symbol, 7)
-    
-    def _process_klines_data(self, data) -> pd.DataFrame:
-        df = pd.DataFrame(data, columns=[
-            'timestamp', 'open', 'high', 'low', 'close', 'volume',
-            'close_time', 'quote_asset_volume', 'number_of_trades',
-            'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume', 'ignore'
-        ])
-        
-        df = df[['timestamp', 'open', 'high', 'low', 'close', 'volume']]
-        
-        for col in ['open', 'high', 'low', 'close', 'volume']:
-            df[col] = df[col].astype(float)
-        
-        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-        df.set_index('timestamp', inplace=True)
-        
+        df = self.load_local_data(symbol)
+
+        if df.empty:
+            raise FileNotFoundError(
+                f"Δεν βρέθηκαν δεδομένα για {symbol} στο {self.data_dir}/. "
+                f"Ανέβασε το {symbol}_5m_30days.csv."
+            )
+
+        available_span = df.index[-1] - df.index[0]
+        requested_span = timedelta(days=days)
+
+        if available_span < requested_span:
+            print(f"   ⚠️ Ζητήθηκαν {days} μέρες αλλά υπάρχουν μόνο "
+                  f"{available_span}. Χρησιμοποιώ ΟΛΑ τα διαθέσιμα δεδομένα.")
+        else:
+            cutoff = df.index[-1] - requested_span
+            df = df[df.index >= cutoff]
+            print(f"   • Περικοπή σε {days} μέρες: {df.index[0]} έως {df.index[-1]}")
+
         return df
-    
-    def generate_synthetic_data(self, symbol: str, days: int) -> pd.DataFrame:
-        print(f"🧪 Συνθετικά δεδομένα για {symbol}...")
-        periods = days * 24 * 12
-        base_price = 1.0 if symbol == "ONDO" else 25.0 if symbol == "HYPE" else 100.0
-        
-        np.random.seed(42)
-        returns = np.random.normal(0, 0.002, periods)
-        prices = base_price * np.exp(np.cumsum(returns))
-        
-        df = pd.DataFrame({
-            'open': prices * (1 + np.random.normal(0, 0.0005, periods)),
-            'high': prices * (1 + np.random.normal(0.001, 0.001, periods)),
-            'low': prices * (1 + np.random.normal(-0.001, 0.001, periods)),
-            'close': prices,
-            'volume': np.random.uniform(1000, 10000, periods)
-        }, index=pd.date_range(end=datetime.now(), periods=periods, freq='5min'))
-        
-        return df
-    
+
     def run_backtest(self, symbol: str) -> Dict:
         print(f"\n🔄 Backtesting {symbol}...")
-        
+
         df = self.fetch_data(symbol, self.config['test_days'])
-        
+
         strategy = BuickStrategy(self.config)
         strategy.capital = self.config['initial_capital']
-        
+
         positions = []
         trades = []
         equity_history = [strategy.capital]
+        equity_timestamps = [df.index[0]]
         liq_history = []
-        
+
         total_entries = 0
         total_exits = 0
-        total_profit = 0
+        total_profit = 0.0
         liquidated = False
-        
+        liquidation_time = None
+        liquidation_price = None
+        min_distance_overall = 100.0
+        max_exposure_overall = 0.0
+        warning_count = 0
+
         for idx, row in df.iterrows():
             price = row['close']
-            
-            # 1. EXITS: Κάθε θέση ανεξάρτητα
+
+            # 1. EXITS primero — κλείνουμε θέσεις που έφτασαν target
             exits = strategy.calculate_exits(price, positions)
             for exit_order in exits:
                 pos = exit_order['position']
                 profit = exit_order['profit']
-                
+
                 strategy.capital += profit
                 total_profit += profit
                 total_exits += 1
-                
+
                 trades.append({
                     'timestamp': idx,
                     'type': 'EXIT',
@@ -168,102 +100,107 @@ class BacktestEngine:
                     'entry_price': pos['entry_price'],
                     'symbol': symbol,
                     'price_change': exit_order.get('price_change', 0),
-                    'roi': exit_order.get('roi', 0)
+                    'roi': exit_order.get('roi', 0),
                 })
-                
-                pos['closed'] = True
-            
+
             # 2. ENTRIES
             if strategy.should_enter(price, positions):
                 entry = strategy.calculate_entry(price, strategy.capital)
                 if entry is not None:
+                    entry['entry_time'] = idx
                     positions.append(entry)
                     total_entries += 1
-                    
+
                     trades.append({
                         'timestamp': idx,
                         'type': 'ENTRY',
                         'price': price,
                         'margin': entry['margin'],
-                        'base_amount': entry['base_amount'],
+                        'notional': entry['notional'],
                         'entry_index': entry['entry_index'],
-                        'symbol': symbol
+                        'symbol': symbol,
                     })
-            
-            # 3. LIQUIDATION INFO
-            liq_info = strategy.get_liquidation_info(price, positions)
+
+            # 3. ΣΩΣΤΟ unrealized PnL (με leverage) -> live equity
+            unrealized = strategy.calculate_unrealized_pnl(price, positions)
+            current_equity = strategy.capital + unrealized
+
+            # 4. Liquidation check βάσει ΖΩΝΤΑΝΟΥ equity (όχι μόνο realized capital)
+            liq_info = strategy.get_liquidation_info(price, positions, equity=current_equity)
+
             liq_history.append({
                 'timestamp': idx,
                 'price': price,
                 'distance': liq_info['distance'],
                 'exposure': liq_info['exposure_percent'],
-                'open_positions': liq_info['open_positions']
+                'open_positions': liq_info['open_positions'],
+                'equity': current_equity,
             })
-            
-            if liq_info['is_liquidated']:
+
+            if liq_info['distance'] < min_distance_overall:
+                min_distance_overall = liq_info['distance']
+            if liq_info['exposure_percent'] > max_exposure_overall and liq_info['exposure_percent'] != float('inf'):
+                max_exposure_overall = liq_info['exposure_percent']
+            if 0 < liq_info['distance'] < 5:
+                warning_count += 1
+
+            if liq_info['is_liquidated'] or current_equity <= 0:
                 liquidated = True
-                print(f"💀 LIQUIDATION ΣΤΟ {symbol} στις {idx} με τιμή {price}")
+                liquidation_time = idx
+                liquidation_price = price
+                print(f"💀 LIQUIDATION στο {symbol} στις {idx} με τιμή {price:.5f} "
+                      f"(equity έπεσε στα ${current_equity:.2f})")
+                strategy.capital = max(current_equity, 0)
                 positions = []
+                equity_history.append(strategy.capital)
+                equity_timestamps.append(idx)
                 break
-            
+
+            # 5. Emergency stop (πριν φτάσουμε σε liquidation, κλείνουμε όλα χειροκίνητα)
             if strategy.check_emergency(price, positions):
-                print(f"⚠️ EMERGENCY STOP για {symbol} στο {price}")
-                for pos in positions:
-                    if not pos.get('closed', False):
-                        profit = (price - pos['entry_price']) * pos['base_amount'] / pos['entry_price']
-                        strategy.capital += profit
-                        trades.append({
-                            'timestamp': idx,
-                            'type': 'EMERGENCY_EXIT',
-                            'price': price,
-                            'profit': profit,
-                            'symbol': symbol
-                        })
+                print(f"⚠️ EMERGENCY STOP για {symbol} στο {price:.5f} "
+                      f"({idx}) — κλείνω όλες τις ανοιχτές θέσεις")
+                emergency_pnl = strategy.calculate_unrealized_pnl(price, positions)
+                strategy.capital += emergency_pnl
+                total_profit += emergency_pnl
+                trades.append({
+                    'timestamp': idx,
+                    'type': 'EMERGENCY_EXIT',
+                    'price': price,
+                    'profit': emergency_pnl,
+                    'symbol': symbol,
+                })
                 positions = []
-                break
-            
-            # 4. EQUITY CURVE
-            current_equity = strategy.capital
-            unrealized = 0
-            for pos in positions:
-                if not pos.get('closed', False):
-                    unrealized += (price - pos['entry_price']) * pos['base_amount'] / pos['entry_price']
-            equity_history.append(current_equity + unrealized)
-        
+                current_equity = strategy.capital
+
+            equity_history.append(current_equity)
+            equity_timestamps.append(idx)
+
         final_capital = strategy.capital if not liquidated else 0
         total_trades = len([t for t in trades if t['type'] == 'EXIT'])
-        roi = ((final_capital - self.config['initial_capital']) / self.config['initial_capital']) * 100 if not liquidated else -100
-        
+        roi = ((final_capital - self.config['initial_capital']) / self.config['initial_capital']) * 100
+
         entries_df = pd.DataFrame([
             {'time': t['timestamp'], 'price': t['price'], 'entry_index': t.get('entry_index', 0)}
             for t in trades if t['type'] == 'ENTRY'
         ])
-        
+
         exits_df = pd.DataFrame([
             {'time': t['timestamp'], 'price': t['price'], 'entry_index': t.get('entry_index', 0)}
             for t in trades if t['type'] == 'EXIT'
         ])
-        
+
         liq_df = pd.DataFrame(liq_history)
-        if not liq_df.empty:
-            min_distance = liq_df['distance'].min()
-            avg_distance = liq_df['distance'].mean()
-            max_exposure = liq_df['exposure'].max()
-            warnings = len([d for d in liq_df['distance'] if d < 5])
-        else:
-            min_distance = 100
-            avg_distance = 100
-            max_exposure = 0
-            warnings = 0
-        
-        print(f"\n📊 {symbol} | ROI: {roi:.2f}% | Trades: {total_trades} | Entries: {len(entries_df)}")
+
+        print(f"\n📊 {symbol} | ROI: {roi:.2f}% | Trades(exits): {total_trades} | Entries: {total_entries}")
         print(f"   • Σύνολο κερδών: ${total_profit:.2f}")
-        print(f"   • Μέσο κέρδος/trade: ${total_profit/total_trades if total_trades > 0 else 0:.4f}")
-        print(f"   • 🔥 LIQUIDATION: {'✅ ΟΧΙ' if not liquidated else '💀 ΝΑΙ'}")
-        if not liquidated:
-            print(f"   • Ελάχιστη απόσταση: {min_distance:.2f}%")
-            print(f"   • Μέγιστη έκθεση: {max_exposure:.2f}%")
-        
+        if total_trades > 0:
+            print(f"   • Μέσο κέρδος/exit: ${total_profit/total_trades:.4f}")
+        print(f"   • 🔥 LIQUIDATION: {'💀 ΝΑΙ' if liquidated else '✅ ΟΧΙ'}")
+        print(f"   • Ελάχιστη απόσταση από liq: {min_distance_overall:.2f}%")
+        print(f"   • Μέγιστη έκθεση (notional/capital): {max_exposure_overall:.2f}%")
+        print(f"   • Warnings (<5% από liq): {warning_count}")
+
         return {
             'symbol': symbol,
             'initial_capital': self.config['initial_capital'],
@@ -271,20 +208,22 @@ class BacktestEngine:
             'total_profit': total_profit,
             'roi': roi,
             'total_trades': total_trades,
-            'entries': len(entries_df),
+            'entries': total_entries,
             'trades_df': trades,
             'entries_df': entries_df,
             'exits_df': exits_df,
             'equity_history': equity_history,
+            'equity_timestamps': equity_timestamps,
             'price_data': df,
             'liquidation_occurred': liquidated,
-            'min_distance_to_liq': min_distance,
-            'avg_distance_to_liq': avg_distance,
-            'max_exposure': max_exposure,
-            'liquidation_warnings': warnings,
-            'liq_history': liq_df
+            'liquidation_time': liquidation_time,
+            'liquidation_price': liquidation_price,
+            'min_distance_to_liq': min_distance_overall,
+            'max_exposure': max_exposure_overall,
+            'liquidation_warnings': warning_count,
+            'liq_history': liq_df,
         }
-    
+
     def run_multi_backtest(self) -> Dict:
         results = {}
         for coin in self.config['test_coins']:
