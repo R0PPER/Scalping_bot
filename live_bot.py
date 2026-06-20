@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Dict, List
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from binance.client import Client
 
@@ -117,7 +118,7 @@ async def process_coin(symbol: str):
 
 async def bot_loop():
     """Main bot background loop, runs every 10 seconds!"""
-    print("🚀 Bot loop started!")
+    print("[OK] Bot loop started!")
     while True:
         try:
             for symbol in CONFIG["test_coins"]:
@@ -141,7 +142,7 @@ async def bot_loop():
             
             await asyncio.sleep(10)
         except Exception as e:
-            print(f"⚠️ Error in bot loop: {e}")
+            print(f"[WARN] Error in bot loop: {e}")
             await asyncio.sleep(10)
 
 
@@ -157,10 +158,27 @@ async def lifespan(app: FastAPI):
     yield
     
     # Shutdown: Nothing to do for now
-    print("🛑 Bot shutting down...")
+    print("[INFO] Bot shutting down...")
 
 
 app = FastAPI(lifespan=lifespan)
+
+# Add CORS middleware - ΕΝΗΜΕΡΩΜΕΝΟ για Render
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+        "https://scalping-bot-85nc.onrender.com",
+        # Για development - μπορείς να το αφαιρέσεις σε production
+        "*"
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 # --- API ENDPOINTS ---
